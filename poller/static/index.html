@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar Inverter Monitor</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-pv:      #2a78d6;  /* categorical slot 1: blue   */
+    --series-load:    #008300;  /* categorical slot 2: green  */
+    --series-batt:    #e87ba4;  /* categorical slot 3: magenta*/
+    --status-good:    #0ca30c;
+    --status-warning: #fab219;
+    --status-critical:#d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-pv:      #3987e5;
+      --series-load:    #008300;
+      --series-batt:    #d55181;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 20px 48px; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  .sub { color: var(--text-muted); font-size: 13px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+    padding: 3px 11px; border-radius: 999px; font-size: 13px; font-weight: 550;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+  }
+  .pill .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); }
+  .pill.generating .dot { background: var(--status-good); }
+  .pill.standby   .dot { background: var(--status-warning); }
+  .pill.fault .dot, .pill.offline .dot { background: var(--status-critical); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px 12px;
+  }
+  .tile .label { color: var(--text-muted); font-size: 12.5px; margin-bottom: 4px; }
+  .tile .value { font-size: 27px; font-weight: 650; letter-spacing: -0.01em; }
+  .tile .value .unit { font-size: 15px; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
+  .tile .note { color: var(--text-secondary); font-size: 12.5px; margin-top: 3px; min-height: 1.2em; }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 16px 8px; margin-bottom: 16px; position: relative;
+  }
+  .card h2 { font-size: 14.5px; font-weight: 600; margin: 0 0 2px; }
+  .card .desc { color: var(--text-muted); font-size: 12.5px; margin-bottom: 8px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); margin-bottom: 4px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  svg { display: block; width: 100%; }
+  svg text { font: 11px system-ui, sans-serif; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
+  svg .serieslabel { font-size: 11.5px; font-weight: 600; fill: var(--text-secondary); }
+  .tooltip {
+    position: absolute; pointer-events: none; display: none; z-index: 5;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px;
+    font-variant-numeric: tabular-nums; min-width: 150px;
+  }
+  .tooltip .t { color: var(--text-muted); margin-bottom: 4px; }
+  .tooltip .row { display: flex; justify-content: space-between; gap: 14px; }
+  .tooltip .row b { font-weight: 600; }
+  .tooltip .row .k { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .tooltip .row .k i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  details { margin-top: 4px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; padding: 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 5px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--text-muted); font-weight: 550; }
+  th:first-child, td:first-child { text-align: left; }
+  .empty { color: var(--text-muted); padding: 30px 0 38px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Solar Inverter Monitor</h1>
+    <span class="sub" id="meta">connecting&hellip;</span>
+    <span class="pill offline" id="statusPill"><span class="dot"></span><span id="statusText">Offline</span></span>
+  </header>
+
+  <div class="tiles">
+    <div class="tile"><div class="label">AC output power</div>
+      <div class="value" id="tAc">&ndash;</div><div class="note" id="tAcNote"></div></div>
+    <div class="tile"><div class="label">Energy today</div>
+      <div class="value" id="tEnergy">&ndash;</div><div class="note" id="tEnergyNote"></div></div>
+    <div class="tile"><div class="label">Battery charge</div>
+      <div class="value" id="tSoc">&ndash;</div><div class="note" id="tSocNote"></div></div>
+    <div class="tile"><div class="label">Inverter temperature</div>
+      <div class="value" id="tTemp">&ndash;</div><div class="note" id="tTempNote"></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Power flow</h2>
+    <div class="desc">Solar generation, house consumption, and battery power (positive = discharging into the house).</div>
+    <div class="legend">
+      <span><i style="background:var(--series-pv)"></i>PV generation</span>
+      <span><i style="background:var(--series-load)"></i>House load</span>
+      <span><i style="background:var(--series-batt)"></i>Battery</span>
+    </div>
+    <div id="powerChart"></div>
+    <div class="tooltip" id="powerTip"></div>
+  </div>
+
+  <div class="card">
+    <h2>Battery state of charge</h2>
+    <div class="desc">Rolling history from the poll buffer.</div>
+    <div id="socChart"></div>
+    <div class="tooltip" id="socTip"></div>
+  </div>
+
+  <div class="card" style="padding-bottom:14px">
+    <details>
+      <summary>Recent readings (table view)</summary>
+      <div style="overflow-x:auto"><table id="dataTable"></table></div>
+    </details>
+  </div>
+</div>
+
+<script>
+"use strict";
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmtTime = ts => new Date(ts * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+const fmtW = w => Math.abs(w) >= 10000 ? (w/1000).toFixed(1) + " kW" : Math.round(w) + " W";
+
+let samples = [];
+
+function niceTicks(min, max, n = 5) {
+  if (min === max) { min -= 1; max += 1; }
+  const span = max - min, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n + 1) || mag * 10;
+  const lo = Math.floor(min / step) * step, ticks = [];
+  for (let v = lo; v <= max + step * 0.001; v += step) if (v >= min - step * 0.001) ticks.push(v);
+  return ticks;
+}
+
+function lineChart(mountId, tipId, seriesDefs, opts) {
+  const mount = document.getElementById(mountId), tip = document.getElementById(tipId);
+  const H = opts.height || 240, PAD = {l: 46, r: 86, t: 12, b: 24};
+
+  function render() {
+    const W = mount.clientWidth || 900;
+    if (samples.length < 2) { mount.innerHTML = '<div class="empty">Waiting for data&hellip;</div>'; return; }
+    const xs = samples.map(s => s.timestamp);
+    const x0 = xs[0], x1 = xs[xs.length - 1];
+    let vals = [];
+    seriesDefs.forEach(sd => vals = vals.concat(samples.map(s => s[sd.key])));
+    let vmin = Math.min(...vals), vmax = Math.max(...vals);
+    if (opts.min !== undefined) vmin = Math.min(opts.min, vmin);
+    if (opts.max !== undefined) vmax = Math.max(opts.max, vmax);
+    const pad = (vmax - vmin) * 0.08 || 1; vmax += pad; if (vmin !== 0 || opts.min === undefined) vmin -= pad;
+    if (opts.clampMin !== undefined) vmin = Math.max(vmin, opts.clampMin);
+
+    const px = t => PAD.l + (t - x0) / (x1 - x0 || 1) * (W - PAD.l - PAD.r);
+    const py = v => PAD.t + (1 - (v - vmin) / (vmax - vmin)) * (H - PAD.t - PAD.b);
+
+    let g = "";
+    for (const v of niceTicks(vmin, vmax)) {
+      const y = py(v);
+      const major = Math.abs(v) < 1e-9 && vmin < 0;
+      g += `<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${y}" y2="${y}" stroke="${major ? css('--baseline') : css('--grid')}" stroke-width="1"/>`;
+      g += `<text x="${PAD.l - 7}" y="${y + 3.5}" text-anchor="end">${opts.fmtTick(v)}</text>`;
+    }
+    const nx = Math.max(2, Math.floor((W - PAD.l - PAD.r) / 130));
+    for (let i = 0; i <= nx; i++) {
+      const t = x0 + (x1 - x0) * i / nx, x = px(t);
+      g += `<text x="${x}" y="${H - 6}" text-anchor="middle">${fmtTime(t)}</text>`;
+    }
+    g += `<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${H - PAD.b}" y2="${H - PAD.b}" stroke="${css('--baseline')}" stroke-width="1"/>`;
+
+    const labelYs = [];
+    for (const sd of seriesDefs) {
+      const color = css(sd.color);
+      const d = samples.map((s, i) => `${i ? "L" : "M"}${px(s.timestamp).toFixed(1)},${py(s[sd.key]).toFixed(1)}`).join("");
+      g += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      let ly = py(samples[samples.length - 1][sd.key]);
+      while (labelYs.some(o => Math.abs(o - ly) < 13)) ly += 13;  // dodge collisions
+      labelYs.push(ly);
+      g += `<circle cx="${W - PAD.r + 1}" cy="${ly}" r="3" fill="${color}"/>`;
+      g += `<text x="${W - PAD.r + 8}" y="${ly + 3.5}" class="serieslabel">${sd.name}</text>`;
+    }
+    g += `<line id="${mountId}-cross" y1="${PAD.t}" y2="${H - PAD.b}" stroke="${css('--baseline')}" stroke-width="1" stroke-dasharray="3 3" visibility="hidden"/>`;
+
+    mount.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}">${g}</svg>`;
+    const svg = mount.firstChild, cross = svg.querySelector(`[id="${mountId}-cross"]`);
+
+    svg.onmousemove = e => {
+      const r = svg.getBoundingClientRect(), mx = (e.clientX - r.left) * (W / r.width);
+      if (mx < PAD.l || mx > W - PAD.r) { svg.onmouseleave(); return; }
+      const t = x0 + (mx - PAD.l) / (W - PAD.l - PAD.r) * (x1 - x0);
+      let s = samples[0];
+      for (const c of samples) if (Math.abs(c.timestamp - t) < Math.abs(s.timestamp - t)) s = c;
+      cross.setAttribute("x1", px(s.timestamp)); cross.setAttribute("x2", px(s.timestamp));
+      cross.setAttribute("visibility", "visible");
+      tip.innerHTML = `<div class="t">${fmtTime(s.timestamp)}</div>` + seriesDefs.map(sd =>
+        `<div class="row"><span class="k"><i style="background:${css(sd.color)}"></i>${sd.name}</span><b>${opts.fmtVal(s[sd.key])}</b></div>`).join("");
+      tip.style.display = "block";
+      const card = mount.closest(".card"), cr = card.getBoundingClientRect();
+      let tx = e.clientX - cr.left + 16;
+      if (tx + 180 > cr.width) tx = e.clientX - cr.left - 180;
+      tip.style.left = tx + "px";
+      tip.style.top = (e.clientY - cr.top - 10) + "px";
+    };
+    svg.onmouseleave = () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); };
+  }
+  return render;
+}
+
+const drawPower = lineChart("powerChart", "powerTip", [
+  { key: "pv_power",      name: "PV",      color: "--series-pv" },
+  { key: "load_power",    name: "Load",    color: "--series-load" },
+  { key: "battery_power", name: "Battery", color: "--series-batt" },
+], { height: 250, min: 0, fmtTick: v => Math.abs(v) >= 1000 ? (v/1000) + "k" : v, fmtVal: fmtW });
+
+const drawSoc = lineChart("socChart", "socTip", [
+  { key: "battery_soc", name: "SOC", color: "--series-pv" },
+], { height: 160, min: 0, max: 100, clampMin: 0, fmtTick: v => v + "%", fmtVal: v => v.toFixed(0) + "%" });
+
+const STATUS = { 0: ["standby", "Standby"], 1: ["generating", "Generating"], 2: ["fault", "Fault"] };
+
+function updateTiles(s) {
+  const pill = document.getElementById("statusPill"), st = document.getElementById("statusText");
+  if (!s || !s.connected) {
+    pill.className = "pill offline"; st.textContent = "Offline";
+    document.getElementById("meta").textContent = "no connection to inverter";
+    return;
+  }
+  const [cls, label] = STATUS[s.status] || STATUS[2];
+  pill.className = "pill " + cls; st.textContent = label;
+  document.getElementById("meta").textContent =
+    `polled ${fmtTime(s.timestamp)} · grid ${s.ac_voltage.toFixed(1)} V / ${s.grid_frequency.toFixed(2)} Hz`;
+
+  const set = (id, html) => document.getElementById(id).innerHTML = html;
+  set("tAc", s.ac_power >= 10000 ? (s.ac_power/1000).toFixed(2) + '<span class="unit">kW</span>'
+                                 : Math.round(s.ac_power) + '<span class="unit">W</span>');
+  set("tAcNote", `PV ${fmtW(s.pv_power)} · load ${fmtW(s.load_power)}`);
+  set("tEnergy", s.energy_today.toFixed(1) + '<span class="unit">kWh</span>');
+  set("tEnergyNote", `lifetime ${(s.energy_total/1000).toFixed(1)} MWh`);
+  set("tSoc", Math.round(s.battery_soc) + '<span class="unit">%</span>');
+  set("tSocNote", s.battery_power > 25 ? `discharging at ${fmtW(s.battery_power)}`
+      : s.battery_power < -25 ? `charging at ${fmtW(-s.battery_power)}` : "idle");
+  set("tTemp", s.temperature.toFixed(1) + '<span class="unit">&deg;C</span>');
+  set("tTempNote", `battery ${s.battery_voltage.toFixed(1)} V`);
+}
+
+function updateTable() {
+  const cols = [
+    ["Time", s => fmtTime(s.timestamp)],
+    ["PV (W)", s => Math.round(s.pv_power)],
+    ["Load (W)", s => Math.round(s.load_power)],
+    ["Battery (W)", s => Math.round(s.battery_power)],
+    ["SOC (%)", s => Math.round(s.battery_soc)],
+    ["AC out (W)", s => Math.round(s.ac_power)],
+    ["AC (V)", s => s.ac_voltage.toFixed(1)],
+    ["Freq (Hz)", s => s.grid_frequency.toFixed(2)],
+    ["Temp (°C)", s => s.temperature.toFixed(1)],
+    ["Today (kWh)", s => s.energy_today.toFixed(1)],
+  ];
+  const rows = samples.slice(-12).reverse();
+  document.getElementById("dataTable").innerHTML =
+    "<tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr>" +
+    rows.map(s => "<tr>" + cols.map(c => `<td>${c[1](s)}</td>`).join("") + "</tr>").join("");
+}
+
+async function refresh() {
+  try {
+    const [live, hist] = await Promise.all([
+      fetch("/api/live").then(r => r.json()),
+      fetch("/api/history").then(r => r.json()),
+    ]);
+    samples = hist.samples;
+    updateTiles(live);
+    drawPower(); drawSoc(); updateTable();
+  } catch (e) {
+    updateTiles(null);
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+window.addEventListener("resize", () => { drawPower(); drawSoc(); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawPower(); drawSoc(); });
+</script>
+</body>
+</html>

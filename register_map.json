@@ -1,0 +1,22 @@
+{
+  "description": "Modbus input register map (FC 04 - Read Input Registers) for the simulated solar inverter. When the real inverter arrives, replace this file with the manufacturer's register map and update host/port in config.json - the poller and dashboard need no code changes.",
+  "registers": [
+    { "name": "status",          "address": 0,  "words": 1, "scale": 1,    "signed": false, "unit": "",    "label": "Inverter status (0=standby, 1=generating, 2=fault)" },
+    { "name": "pv1_voltage",     "address": 1,  "words": 1, "scale": 0.1,  "signed": false, "unit": "V",   "label": "PV string 1 voltage" },
+    { "name": "pv1_current",     "address": 2,  "words": 1, "scale": 0.1,  "signed": false, "unit": "A",   "label": "PV string 1 current" },
+    { "name": "pv2_voltage",     "address": 3,  "words": 1, "scale": 0.1,  "signed": false, "unit": "V",   "label": "PV string 2 voltage" },
+    { "name": "pv2_current",     "address": 4,  "words": 1, "scale": 0.1,  "signed": false, "unit": "A",   "label": "PV string 2 current" },
+    { "name": "pv_power",        "address": 5,  "words": 1, "scale": 1,    "signed": false, "unit": "W",   "label": "Total PV (DC) power" },
+    { "name": "ac_voltage",      "address": 6,  "words": 1, "scale": 0.1,  "signed": false, "unit": "V",   "label": "AC output voltage" },
+    { "name": "ac_current",      "address": 7,  "words": 1, "scale": 0.1,  "signed": false, "unit": "A",   "label": "AC output current" },
+    { "name": "ac_power",        "address": 8,  "words": 1, "scale": 1,    "signed": false, "unit": "W",   "label": "AC output power" },
+    { "name": "grid_frequency",  "address": 9,  "words": 1, "scale": 0.01, "signed": false, "unit": "Hz",  "label": "Grid frequency" },
+    { "name": "load_power",      "address": 10, "words": 1, "scale": 1,    "signed": false, "unit": "W",   "label": "House load power" },
+    { "name": "battery_power",   "address": 11, "words": 1, "scale": 1,    "signed": true,  "unit": "W",   "label": "Battery power (+discharge / -charge)" },
+    { "name": "battery_soc",     "address": 12, "words": 1, "scale": 1,    "signed": false, "unit": "%",   "label": "Battery state of charge" },
+    { "name": "battery_voltage", "address": 13, "words": 1, "scale": 0.1,  "signed": false, "unit": "V",   "label": "Battery voltage" },
+    { "name": "temperature",     "address": 14, "words": 1, "scale": 0.1,  "signed": true,  "unit": "C",   "label": "Inverter heatsink temperature" },
+    { "name": "energy_today",    "address": 15, "words": 1, "scale": 0.1,  "signed": false, "unit": "kWh", "label": "Energy generated today" },
+    { "name": "energy_total",    "address": 16, "words": 2, "scale": 0.1,  "signed": false, "unit": "kWh", "label": "Lifetime energy generated (32-bit, high word first)" }
+  ]
+}

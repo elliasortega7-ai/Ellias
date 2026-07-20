@@ -1,0 +1,26 @@
+{
+  "inverter": {
+    "host": "127.0.0.1",
+    "port": 5020,
+    "device_id": 1,
+    "comment": "Point host/port at the real inverter's Modbus TCP interface (usually port 502) when you have it."
+  },
+  "poller": {
+    "interval_seconds": 3,
+    "history_samples": 1200,
+    "comment": "3s is a safe poll rate per most inverter manuals (2-5s recommended). 1200 samples at 3s = 1 hour of history."
+  },
+  "dashboard": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "simulator": {
+    "listen_host": "0.0.0.0",
+    "listen_port": 5020,
+    "time_speed": 60,
+    "start_hour": 8.5,
+    "rated_power_w": 8000,
+    "battery_capacity_kwh": 10.0,
+    "comment": "time_speed 60 = one simulated day passes in 24 real minutes so you can watch the full solar curve. Set to 1 for real time."
+  }
+}
