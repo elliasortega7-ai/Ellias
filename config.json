@@ -1,14 +1,38 @@
 {
   "inverter": {
+    "mode": "tcp",
     "host": "127.0.0.1",
     "port": 5020,
     "device_id": 1,
-    "comment": "Point host/port at the real inverter's Modbus TCP interface (usually port 502) when you have it."
+    "serial": {
+      "port": "COM3",
+      "baudrate": 9600,
+      "parity": "N",
+      "stopbits": 1,
+      "bytesize": 8
+    },
+    "comment": "mode 'tcp' = networked inverter or the simulator (host/port; real inverters use 502). mode 'serial' = RS-485 via USB adapter (uses the 'serial' block; port is COMx on Windows or /dev/ttyUSB0 on Linux). device_id is the Modbus unit/slave id."
   },
   "poller": {
     "interval_seconds": 3,
     "history_samples": 1200,
-    "comment": "3s is a safe poll rate per most inverter manuals (2-5s recommended). 1200 samples at 3s = 1 hour of history."
+    "comment": "3s is a safe poll rate per most inverter manuals (2-5s recommended). history_samples caps how many rows the dashboard charts request."
+  },
+  "database": {
+    "enabled": true,
+    "path": "inverter_data.db",
+    "comment": "SQLite file storing every reading so history survives restarts. Path is relative to the project root. Delete the file to reset, or if you change register_map.json."
+  },
+  "mqtt": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic_prefix": "solar/inverter",
+    "qos": 0,
+    "publish_per_field": true,
+    "username": "",
+    "password": "",
+    "comment": "Publishes each reading to an MQTT broker (e.g. Mosquitto on port 1883). Needs a broker running; if none is reachable the poller keeps working and reconnects automatically. Set enabled=false to turn off."
   },
   "dashboard": {
     "host": "0.0.0.0",

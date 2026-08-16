@@ -1,0 +1,10 @@
+# SQLite database (generated at runtime)
+*.db
+*.db-journal
+*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
