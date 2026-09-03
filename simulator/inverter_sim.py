@@ -38,8 +38,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = json.loads((ROOT / "config.json").read_text())["simulator"]
-REGISTER_MAP = json.loads((ROOT / "register_map.json").read_text())["registers"]
+_MAP = json.loads((ROOT / "register_map.json").read_text())
+REGISTER_MAP = _MAP["registers"]
+CONTROLS = _MAP.get("controls", [])
 REGISTER_COUNT = max(r["address"] + r["words"] for r in REGISTER_MAP)
+CONTROL_COUNT = max((c["address"] + c["words"] for c in CONTROLS), default=0)
 
 SUNRISE = 6.5
 SUNSET = 19.5
@@ -98,8 +101,19 @@ class InverterModel:
         base = 250 + 200 * math.exp(-((hour - 8) ** 2) / 8) + 350 * math.exp(-((hour - 20) ** 2) / 6)
         return base + self.load_spike_w + random.uniform(-20, 20)
 
-    def tick(self):
-        """Advance the model to 'now' and return a dict of readings."""
+    def tick(self, controls=None):
+        """Advance the model to 'now' and return a dict of readings.
+
+        `controls` is the current holding-register state (what the cloud has
+        written via Modbus): the inverter obeys it here, so a write actually
+        changes the numbers the poller reads back.
+        """
+        controls = controls or {}
+        enabled = int(controls.get("inverter_enable", 1)) != 0
+        power_limit_w = self.rated_power_w * controls.get("power_limit_pct", 100) / 100.0
+        charge_limit = max(0.0, min(MAX_CHARGE_W, controls.get("battery_charge_limit", MAX_CHARGE_W)))
+        discharge_limit = max(0.0, min(MAX_DISCHARGE_W, controls.get("battery_discharge_limit", MAX_DISCHARGE_W)))
+
         now = time.monotonic()
         dt_sim = (now - self.last_tick) * self.time_speed
         self.last_tick = now
@@ -116,16 +130,26 @@ class InverterModel:
 
         load_power = self._step_load(dt_sim)
 
-        # Battery balances PV against load: surplus charges, deficit discharges.
-        surplus = pv_power * INVERTER_EFFICIENCY - load_power
-        if surplus >= 0:
-            battery_power = -min(surplus, MAX_CHARGE_W) if self.battery_soc < 100 else 0.0
+        if not enabled:
+            # Inverter switched off: no MPPT harvest, no AC output, battery idle.
+            pv_power = 0.0
+            battery_power = 0.0
         else:
-            battery_power = min(-surplus, MAX_DISCHARGE_W) if self.battery_soc > 10 else 0.0
+            # Battery balances PV against load, within the configured charge/
+            # discharge power limits: surplus charges, deficit discharges.
+            surplus = pv_power * INVERTER_EFFICIENCY - load_power
+            if surplus >= 0:
+                battery_power = -min(surplus, charge_limit) if self.battery_soc < 100 else 0.0
+            else:
+                battery_power = min(-surplus, discharge_limit) if self.battery_soc > 10 else 0.0
         self.battery_soc -= (battery_power * dt_sim / 3600) / self.battery_capacity_wh * 100
         self.battery_soc = max(5.0, min(100.0, self.battery_soc))
 
         ac_power = max(0.0, pv_power * INVERTER_EFFICIENCY + battery_power)
+        if enabled:
+            ac_power = min(ac_power, power_limit_w)  # active power limit curtails output
+        else:
+            ac_power = 0.0
 
         self.energy_today_wh += pv_power * dt_sim / 3600
         self.energy_total_wh += pv_power * dt_sim / 3600
@@ -134,7 +158,7 @@ class InverterModel:
         target_temp = 25.0 + 30.0 * (ac_power / self.rated_power_w)
         self.temperature_c += (target_temp - self.temperature_c) * min(1.0, 0.001 * dt_sim)
 
-        generating = pv_power > 15
+        generating = enabled and pv_power > 15
         if generating:
             # MPP voltage sags slightly as power rises; strings split ~55/45.
             pv1_v = 385 - 20 * (pv_power / self.rated_power_w) + random.uniform(-2, 2)
@@ -187,16 +211,45 @@ def encode(readings):
     return regs
 
 
+def control_defaults():
+    """Encode the configured default value of every control into a register image."""
+    regs = [0] * CONTROL_COUNT
+    for c in CONTROLS:
+        regs[c["address"]] = round(c.get("default", 0) / c["scale"]) & 0xFFFF
+    return regs
+
+
+def decode_controls(regs):
+    """Turn the raw holding-register image into a dict of scaled control values."""
+    out = {}
+    for c in CONTROLS:
+        raw = regs[c["address"]]
+        if c.get("signed") and raw >= 0x8000:
+            raw -= 0x10000
+        out[c["name"]] = raw * c["scale"]
+    return out
+
+
 class RegisterBank:
     """Thread-safe register image shared between model and Modbus server."""
 
-    def __init__(self):
-        self._regs = [0] * REGISTER_COUNT
+    def __init__(self, size):
+        self._regs = [0] * size
         self._lock = threading.Lock()
 
     def write(self, regs):
         with self._lock:
             self._regs = list(regs)
+
+    def write_range(self, address, values):
+        """Write one or more registers starting at `address`. Returns False on a
+        bad address (so the server can reply with an illegal-data-address error)."""
+        with self._lock:
+            if address < 0 or address + len(values) > len(self._regs):
+                return False
+            for i, v in enumerate(values):
+                self._regs[address + i] = v & 0xFFFF
+            return True
 
     def read(self, address, count):
         with self._lock:
@@ -204,14 +257,23 @@ class RegisterBank:
                 return None
             return self._regs[address:address + count]
 
+    def snapshot(self):
+        with self._lock:
+            return list(self._regs)
 
-BANK = RegisterBank()
+
+BANK = RegisterBank(REGISTER_COUNT)          # input registers (measurements, FC 04)
+CONTROL_BANK = RegisterBank(CONTROL_COUNT)   # holding registers (settings, FC 03/06/16)
+CONTROL_BANK.write(control_defaults())
 
 ILLEGAL_FUNCTION, ILLEGAL_DATA_ADDRESS = 0x01, 0x02
 
 
 class ModbusTCPHandler(socketserver.BaseRequestHandler):
-    """Answers Modbus TCP read requests (FC 03/04) from the register bank."""
+    """Answers Modbus TCP requests: read input regs (FC 04) and holding regs
+    (FC 03), and write holding regs (FC 06 single, FC 16 multiple). Reads serve
+    live measurements; writes land in the control bank, so the cloud can change
+    inverter settings - the "Cloud Control" path from the API overview."""
 
     def handle(self):
         while True:
@@ -222,22 +284,48 @@ class ModbusTCPHandler(socketserver.BaseRequestHandler):
             pdu = self._recv_exact(length - 1)
             if pdu is None or protocol_id != 0:
                 return
-            function_code = pdu[0]
-            if function_code in (0x03, 0x04) and len(pdu) == 5:
-                address, count = struct.unpack(">HH", pdu[1:5])
-                regs = BANK.read(address, count) if 1 <= count <= 125 else None
-                if regs is None:
-                    response = struct.pack(">BB", function_code | 0x80, ILLEGAL_DATA_ADDRESS)
-                else:
-                    response = struct.pack(">BB", function_code, count * 2)
-                    response += struct.pack(f">{count}H", *regs)
-            else:
-                response = struct.pack(">BB", function_code | 0x80, ILLEGAL_FUNCTION)
+            response = self._dispatch(pdu)
             mbap = struct.pack(">HHHB", transaction_id, 0, len(response) + 1, unit_id)
             try:
                 self.request.sendall(mbap + response)
             except OSError:
                 return
+
+    def _dispatch(self, pdu):
+        function_code = pdu[0]
+        # --- Reads: FC 04 = input registers, FC 03 = holding (control) registers
+        if function_code in (0x03, 0x04) and len(pdu) == 5:
+            address, count = struct.unpack(">HH", pdu[1:5])
+            bank = CONTROL_BANK if function_code == 0x03 else BANK
+            regs = bank.read(address, count) if 1 <= count <= 125 else None
+            if regs is None:
+                return struct.pack(">BB", function_code | 0x80, ILLEGAL_DATA_ADDRESS)
+            return struct.pack(">BB", function_code, count * 2) + struct.pack(f">{count}H", *regs)
+        # --- FC 06: write a single holding register
+        if function_code == 0x06 and len(pdu) == 5:
+            address, value = struct.unpack(">HH", pdu[1:5])
+            if not CONTROL_BANK.write_range(address, [value]):
+                return struct.pack(">BB", function_code | 0x80, ILLEGAL_DATA_ADDRESS)
+            self._log_write(address, [value])
+            return pdu  # FC 06 echoes the request back verbatim
+        # --- FC 16: write multiple holding registers
+        if function_code == 0x10 and len(pdu) >= 6:
+            address, count, byte_count = struct.unpack(">HHB", pdu[1:6])
+            if byte_count == count * 2 and len(pdu) == 6 + byte_count and 1 <= count <= 123:
+                values = list(struct.unpack(f">{count}H", pdu[6:6 + byte_count]))
+                if not CONTROL_BANK.write_range(address, values):
+                    return struct.pack(">BB", function_code | 0x80, ILLEGAL_DATA_ADDRESS)
+                self._log_write(address, values)
+                return struct.pack(">BHH", function_code, address, count)
+            return struct.pack(">BB", function_code | 0x80, ILLEGAL_DATA_ADDRESS)
+        return struct.pack(">BB", function_code | 0x80, ILLEGAL_FUNCTION)
+
+    @staticmethod
+    def _log_write(address, values):
+        names = {c["address"]: c["name"] for c in CONTROLS}
+        for i, v in enumerate(values):
+            label = names.get(address + i, f"holding[{address + i}]")
+            logging.info("control write: %s <- %s", label, v)
 
     def _recv_exact(self, n):
         data = b""
@@ -259,7 +347,8 @@ class ThreadingTCPServer(socketserver.ThreadingTCPServer):
 
 def updater(model, period=1.0):
     while True:
-        readings = model.tick()
+        controls = decode_controls(CONTROL_BANK.snapshot())
+        readings = model.tick(controls)
         BANK.write(encode(readings))
         hh, mm = int(model.hour_of_day()), int(model.hour_of_day() * 60) % 60
         logging.info(
@@ -278,7 +367,7 @@ def main():
         time_speed=CONFIG["time_speed"],
         start_hour=CONFIG["start_hour"],
     )
-    BANK.write(encode(model.tick()))
+    BANK.write(encode(model.tick(decode_controls(CONTROL_BANK.snapshot()))))
     threading.Thread(target=updater, args=(model,), daemon=True).start()
 
     addr = (CONFIG["listen_host"], CONFIG["listen_port"])

@@ -98,6 +98,29 @@
   th { color: var(--text-muted); font-weight: 550; }
   th:first-child, td:first-child { text-align: left; }
   .empty { color: var(--text-muted); padding: 30px 0 38px; text-align: center; }
+
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px 24px; align-items: end; }
+  .ctl { display: flex; flex-direction: column; gap: 7px; }
+  .ctl > label { color: var(--text-secondary); font-size: 12.5px; }
+  .ctl .row2 { display: flex; align-items: center; gap: 12px; }
+  .ctl input[type=range] { flex: 1; accent-color: var(--series-pv); }
+  .ctl .val { font-variant-numeric: tabular-nums; font-weight: 650; min-width: 66px; text-align: right; }
+  .switch { display: inline-flex; gap: 8px; }
+  .switch button {
+    cursor: pointer; border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-secondary); border-radius: 8px; padding: 7px 16px; font: inherit; font-weight: 600;
+  }
+  .switch button.sel-on  { background: var(--status-good);     border-color: var(--status-good);     color: #fff; }
+  .switch button.sel-off { background: var(--status-critical); border-color: var(--status-critical); color: #fff; }
+  .ctlbar { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
+  .ctlbar button.apply {
+    cursor: pointer; border: 1px solid var(--series-pv); background: var(--series-pv);
+    color: #fff; border-radius: 8px; padding: 8px 20px; font: inherit; font-weight: 650;
+  }
+  .ctlbar button.apply:disabled { opacity: .45; cursor: default; }
+  .ctlmsg { color: var(--text-muted); font-size: 12.5px; }
+  .ctlmsg.ok { color: var(--status-good); }
+  .ctlmsg.err { color: var(--status-critical); }
 </style>
 </head>
 <body>
@@ -117,6 +140,16 @@
       <div class="value" id="tSoc">&ndash;</div><div class="note" id="tSocNote"></div></div>
     <div class="tile"><div class="label">Inverter temperature</div>
       <div class="value" id="tTemp">&ndash;</div><div class="note" id="tTempNote"></div></div>
+  </div>
+
+  <div class="card" id="controlCard" hidden>
+    <h2>Inverter controls</h2>
+    <div class="desc">Cloud Control: settings you change here are written to the inverter over Modbus (dashboard &rarr; poller &rarr; FC&nbsp;06 write). An MQTT command to <code id="cmdTopic">solar/inverter/cmd</code> does exactly the same thing.</div>
+    <div class="controls" id="controlBody"></div>
+    <div class="ctlbar">
+      <button class="apply" id="applyBtn" disabled>Apply changes</button>
+      <span class="ctlmsg" id="ctlMsg"></span>
+    </div>
   </div>
 
   <div class="card">
@@ -291,6 +324,98 @@ function updateTable() {
     rows.map(s => "<tr>" + cols.map(c => `<td>${c[1](s)}</td>`).join("") + "</tr>").join("");
 }
 
+// ---- Inverter controls (the Cloud Control write path) ----
+let controlEls = {};        // name -> { get, set } widget accessors
+let controlsBuilt = false;
+let controlsDirty = false;  // true while the user has unsent edits
+
+function setCtlMsg(text, cls) {
+  const m = document.getElementById("ctlMsg");
+  m.textContent = text; m.className = "ctlmsg" + (cls ? " " + cls : "");
+}
+function markDirty() {
+  controlsDirty = true;
+  document.getElementById("applyBtn").disabled = false;
+  setCtlMsg("unsaved changes", "");
+}
+
+function buildControls(defs, values) {
+  const body = document.getElementById("controlBody");
+  body.innerHTML = ""; controlEls = {};
+  for (const def of defs) {
+    const wrap = document.createElement("div");
+    wrap.className = "ctl";
+    const label = document.createElement("label");
+    label.textContent = def.label || def.name;
+    wrap.appendChild(label);
+    const start = Number(values[def.name] ?? def.default ?? def.min ?? 0);
+    if (def.min === 0 && def.max === 1) {          // boolean -> On/Off switch
+      const sw = document.createElement("div"); sw.className = "switch";
+      const on = document.createElement("button"), off = document.createElement("button");
+      on.textContent = "On"; off.textContent = "Off";
+      let cur = start ? 1 : 0;
+      const paint = () => { on.className = cur ? "sel-on" : ""; off.className = cur ? "" : "sel-off"; };
+      on.onclick = () => { cur = 1; paint(); markDirty(); };
+      off.onclick = () => { cur = 0; paint(); markDirty(); };
+      paint(); sw.append(on, off); wrap.appendChild(sw);
+      controlEls[def.name] = { get: () => cur, set: v => { cur = Number(v) ? 1 : 0; paint(); } };
+    } else {                                        // numeric -> slider + readout
+      const row = document.createElement("div"); row.className = "row2";
+      const range = document.createElement("input");
+      range.type = "range"; range.min = def.min; range.max = def.max;
+      range.step = (def.max - def.min) > 200 ? 50 : 1;
+      const out = document.createElement("span"); out.className = "val";
+      const unit = def.unit ? " " + def.unit : "";
+      const show = () => out.textContent = range.value + unit;
+      range.value = start; show();
+      range.oninput = () => { show(); markDirty(); };
+      row.append(range, out); wrap.appendChild(row);
+      controlEls[def.name] = { get: () => Number(range.value), set: v => { range.value = v; show(); } };
+    }
+    body.appendChild(wrap);
+  }
+  document.getElementById("controlCard").hidden = defs.length === 0;
+  document.getElementById("applyBtn").onclick = applyControls;
+  controlsBuilt = true;
+}
+
+function syncControlValues(values) {
+  if (controlsDirty) return;   // never clobber edits the user hasn't applied yet
+  for (const name in controlEls)
+    if (values[name] !== undefined) controlEls[name].set(values[name]);
+}
+
+async function applyControls() {
+  const btn = document.getElementById("applyBtn");
+  const payload = {};
+  for (const name in controlEls) payload[name] = controlEls[name].get();
+  btn.disabled = true; setCtlMsg("sending…", "");
+  try {
+    const res = await fetch("/api/command", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      controlsDirty = false;
+      syncControlValues(data.values || {});
+      setCtlMsg("applied ✓ written to the inverter", "ok");
+    } else {
+      setCtlMsg(data.error || "command rejected", "err"); btn.disabled = false;
+    }
+  } catch (e) {
+    setCtlMsg("network error", "err"); btn.disabled = false;
+  }
+}
+
+async function refreshControls() {
+  try {
+    const data = await fetch("/api/controls").then(r => r.json());
+    if (!controlsBuilt) buildControls(data.controls || [], data.values || {});
+    else syncControlValues(data.values || {});
+  } catch (e) { /* keep last-known state */ }
+}
+
 async function refresh() {
   try {
     const [live, hist] = await Promise.all([
@@ -303,6 +428,7 @@ async function refresh() {
   } catch (e) {
     updateTiles(null);
   }
+  refreshControls();
 }
 
 refresh();

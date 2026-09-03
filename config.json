@@ -30,9 +30,10 @@
     "topic_prefix": "solar/inverter",
     "qos": 0,
     "publish_per_field": true,
+    "accept_commands": true,
     "username": "",
     "password": "",
-    "comment": "Publishes each reading to an MQTT broker (e.g. Mosquitto on port 1883). Needs a broker running; if none is reachable the poller keeps working and reconnects automatically. Set enabled=false to turn off."
+    "comment": "Publishes each reading to an MQTT broker (e.g. Mosquitto on port 1883) and, when accept_commands=true, subscribes to <topic_prefix>/cmd/# to receive control commands (Cloud Control) and turn them into Modbus writes. Needs a broker running; if none is reachable the poller keeps working and reconnects automatically. Set enabled=false to turn off."
   },
   "dashboard": {
     "host": "0.0.0.0",

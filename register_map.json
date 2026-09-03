@@ -1,5 +1,11 @@
 {
-  "description": "Modbus input register map (FC 04 - Read Input Registers) for the simulated solar inverter. When the real inverter arrives, replace this file with the manufacturer's register map and update host/port in config.json - the poller and dashboard need no code changes.",
+  "description": "Modbus register map for the simulated solar inverter. 'registers' are read-only INPUT registers (FC 04 - Read Input Registers): the live measurements. 'controls' are writable HOLDING registers (FC 03 read, FC 06/16 write): the settings the cloud can change to control the inverter. When the real inverter arrives, replace this file with the manufacturer's register map and update host/port in config.json - the poller and dashboard need no code changes.",
+  "controls": [
+    { "name": "inverter_enable",         "address": 0, "words": 1, "scale": 1, "signed": false, "unit": "",  "min": 0, "max": 1,    "default": 1,    "label": "Inverter on/off (1 = on, 0 = off)" },
+    { "name": "power_limit_pct",         "address": 1, "words": 1, "scale": 1, "signed": false, "unit": "%", "min": 0, "max": 100,  "default": 100,  "label": "Active power limit (% of rated AC output)" },
+    { "name": "battery_charge_limit",    "address": 2, "words": 1, "scale": 1, "signed": false, "unit": "W", "min": 0, "max": 5000, "default": 5000, "label": "Maximum battery charge power" },
+    { "name": "battery_discharge_limit", "address": 3, "words": 1, "scale": 1, "signed": false, "unit": "W", "min": 0, "max": 5000, "default": 5000, "label": "Maximum battery discharge power" }
+  ],
   "registers": [
     { "name": "status",          "address": 0,  "words": 1, "scale": 1,    "signed": false, "unit": "",    "label": "Inverter status (0=standby, 1=generating, 2=fault)" },
     { "name": "pv1_voltage",     "address": 1,  "words": 1, "scale": 0.1,  "signed": false, "unit": "V",   "label": "PV string 1 voltage" },
